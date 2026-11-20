@@ -1,0 +1,94 @@
+name: RIO54 Unity WebGL
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    name: Build and publish RIO54
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Reconstruct Unity project source archive
+        run: |
+          cat rio54-source-v1.3.zip.b64.part01 rio54-source-v1.3.zip.b64.part02 rio54-source-v1.3.zip.b64.part03 rio54-source-v1.3.zip.b64.part04 | base64 --decode > /tmp/rio54-source-v1.3.zip
+          unzip -q /tmp/rio54-source-v1.3.zip -d .
+          test -f RIO54_Unity_WebGL/Assets/Resources/RIO54Data.json
+
+      - name: Cache Noto CJK font assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            RIO54_Unity_WebGL/Assets/Resources/Fonts/*.otf
+            RIO54_Unity_WebGL/Assets/Resources/Fonts/LICENSE_NotoSansCJKjp.txt
+            RIO54_Unity_WebGL/Assets/Resources/Fonts/LICENSE_NotoSansCJKsc.txt
+          key: rio54-noto-cjk-sans2-004
+
+      - name: Validate project and prepare fonts
+        working-directory: RIO54_Unity_WebGL
+        run: |
+          python3 Tools/validate_project.py
+          python3 Tools/setup_cjk_fonts.py
+          python3 Tools/setup_cjk_fonts.py --check
+          python3 Tools/validate_project.py
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: RIO54_Unity_WebGL/Library
+          key: Library-RIO54-WebGL-${{ hashFiles('RIO54_Unity_WebGL/Assets/**', 'RIO54_Unity_WebGL/Packages/**', 'RIO54_Unity_WebGL/ProjectSettings/**') }}
+          restore-keys: |
+            Library-RIO54-WebGL-
+
+      - name: Build with Unity 6.3 LTS
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          projectPath: RIO54_Unity_WebGL
+          unityVersion: auto
+          targetPlatform: WebGL
+          buildsPath: build
+          buildMethod: RIO54BuildTools.GameCIBuildWebGL
+
+      - name: Validate WebAssembly output
+        run: python3 RIO54_Unity_WebGL/Tools/validate_webgl_output.py --path RIO54_Unity_WebGL/build/WebGL
+
+      - name: Save downloadable build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RIO54-Unity-WebGL
+          path: RIO54_Unity_WebGL/build/WebGL
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: RIO54_Unity_WebGL/build/WebGL
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
